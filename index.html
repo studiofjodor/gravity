@@ -113,9 +113,26 @@
 
   <div class="hint">Drag to rotate · Scroll to zoom · Right-drag to pan</div>
 
+  <!-- 🟩 START HINZUFÜGEN: Import Map, damit OrbitControls intern "from 'three'" auflösen kann -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <!-- 🟩 ENDE HINZUFÜGEN -->
+
   <script type="module">
-    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
-    import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+    /* 🟨 START AUSTAUSCHEN: Imports auf Import-Map umstellen (Fix: OrbitControls kann 'three' auflösen)
+       VORHER (auskommentiert):
+       import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+       import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+    */
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    /* 🟨 ENDE AUSTAUSCHEN */
 
     // ---------- Helpers ----------
     function clamp(x, a, b){ return Math.max(a, Math.min(b, x)); }
@@ -189,82 +206,6 @@
       }
     }
 
-    function insertParticle(root, i, px, py, pz, m){
-      let node = root;
-      for(;;){
-        node.mass += m;
-        node.sx += m * px;
-        node.sy += m * py;
-        node.sz += m * pz;
-
-        if (node.isLeaf){
-          if (node.p === -1){
-            node.p = i;
-            return;
-          }
-          // already has a particle -> subdivide
-          if (node.depth >= MAX_DEPTH){
-            // too deep: keep "multiple" by not splitting further (approx)
-            // we just accumulate COM; self-handling later avoids explosion
-            return;
-          }
-          const existing = node.p;
-          node.p = -1;
-          ensureChildren(node);
-
-          // re-insert existing particle into child
-          const ex = pxArr[existing*3], ey = pxArr[existing*3+1], ez = pxArr[existing*3+2];
-          const em = massArr[existing];
-          let ci = childIndex(node, ex, ey, ez);
-          node = node.child[ci];
-          // recurse insert existing into that child (loop style)
-          for(;;){
-            node.mass += em;
-            node.sx += em * ex;
-            node.sy += em * ey;
-            node.sz += em * ez;
-
-            if (node.isLeaf){
-              if (node.p === -1){
-                node.p = existing;
-                break;
-              }
-              if (node.depth >= MAX_DEPTH){
-                break;
-              }
-              const e2 = node.p;
-              node.p = -1;
-              ensureChildren(node);
-
-              const e2x = pxArr[e2*3], e2y = pxArr[e2*3+1], e2z = pxArr[e2*3+2];
-              const e2m = massArr[e2];
-              let ci2 = childIndex(node, e2x, e2y, e2z);
-              node = node.child[ci2];
-              continue;
-            } else {
-              let ci3 = childIndex(node, ex, ey, ez);
-              node = node.child[ci3];
-              continue;
-            }
-          }
-
-          // now insert the new particle into correct child (restart from original node)
-          node = root;
-          // fallthrough to normal insertion loop: we already accounted mass at root path above,
-          // but we must continue from root properly without double-counting:
-          // easiest is: do a second insertion pass without adding mass to nodes; but that's costly.
-          // Instead, we implement a separate insertion routine that doesn't double-count.
-          // -> We'll do "insertNoAccum" from the original split node.
-          return;
-        } else {
-          const ci = childIndex(node, px, py, pz);
-          node = node.child[ci];
-        }
-      }
-    }
-
-    // A safer insertion without the "reinsert existing with weird control flow"
-    // We'll rebuild the tree with a clean recursive insert below.
     function buildTree(root, n){
       // reset root
       root.mass = 0; root.sx = 0; root.sy = 0; root.sz = 0;
