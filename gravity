@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>⬡ Gravity Sim (Clone)</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#05060a; color:#e9eef7; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    #root { position:fixed; inset:0; }
+    canvas { display:block; }
+
+    .hud {
+      position:fixed; top:12px; left:12px;
+      font-size:12px; line-height:1.35;
+      background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.08);
+      padding:10px 12px; border-radius:12px; backdrop-filter: blur(8px);
+      user-select:none;
+    }
+    .title {
+      position:fixed; top:12px; left:50%; transform:translateX(-50%);
+      font-weight:700; letter-spacing:.3px;
+      background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.08);
+      padding:10px 14px; border-radius:999px; backdrop-filter: blur(8px);
+      user-select:none;
+    }
+    .panel {
+      position:fixed; top:70px; left:12px; width:290px;
+      background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.08);
+      padding:10px 12px; border-radius:12px; backdrop-filter: blur(8px);
+      user-select:none;
+    }
+    .row { display:flex; align-items:center; gap:10px; margin:8px 0; }
+    .row label { flex: 1 1 auto; font-size:12px; opacity:.92; }
+    .row output { width:70px; text-align:right; font-variant-numeric: tabular-nums; opacity:.95; }
+    input[type="range"] { width:100%; }
+    select, button {
+      background:rgba(255,255,255,.06); color:#e9eef7;
+      border:1px solid rgba(255,255,255,.12);
+      border-radius:10px; padding:8px 10px;
+      font-size:12px;
+    }
+    button { cursor:pointer; }
+    button:active { transform: translateY(1px); }
+    .btnrow { display:flex; gap:10px; margin-top:10px; }
+    .hint {
+      position:fixed; bottom:12px; left:12px;
+      font-size:12px; opacity:.85;
+      background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.08);
+      padding:10px 12px; border-radius:12px; backdrop-filter: blur(8px);
+      user-select:none;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <div class="hud" id="hud">
+    <div>FPS: <span id="fps">--</span></div>
+    <div>Particles: <span id="pcount">--</span></div>
+    <div>Time: <span id="simt">0.00</span> s</div>
+    <div>KE: <span id="ke">--</span></div>
+  </div>
+
+  <div class="title">⬡ Gravity Sim</div>
+
+  <div class="panel">
+    <div class="row">
+      <label for="g">Gravitational Constant</label>
+      <output id="gOut">1.00</output>
+    </div>
+    <input id="g" type="range" min="0.00" max="5.00" step="0.01" value="1.00" />
+
+    <div class="row">
+      <label for="eps">Softening ε</label>
+      <output id="epsOut">2.00</output>
+    </div>
+    <input id="eps" type="range" min="0.10" max="20.00" step="0.10" value="2.00" />
+
+    <div class="row">
+      <label for="dt">Time Step</label>
+      <output id="dtOut">0.016</output>
+    </div>
+    <input id="dt" type="range" min="0.002" max="0.050" step="0.001" value="0.016" />
+
+    <div class="row">
+      <label for="count">Particle Count</label>
+      <output id="countOut">2000</output>
+    </div>
+    <input id="count" type="range" min="200" max="4000" step="100" value="2000" />
+
+    <div class="row">
+      <label for="size">Point Size</label>
+      <output id="sizeOut">2.0</output>
+    </div>
+    <input id="size" type="range" min="1.0" max="6.0" step="0.1" value="2.0" />
+
+    <div class="btnrow">
+      <button id="pauseBtn">⏸ Pause</button>
+      <button id="resetBtn">↺ Reset</button>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <label for="mode">Colour Mode</label>
+      <output></output>
+    </div>
+    <select id="mode" style="width:100%;">
+      <option value="velocity">Velocity</option>
+      <option value="mass">Mass</option>
+      <option value="depth">Depth</option>
+      <option value="age">Age</option>
+    </select>
+  </div>
+
+  <div class="hint">Drag to rotate · Scroll to zoom · Right-drag to pan</div>
+
+  <script type="module">
+    import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+    import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+
+    // ---------- Helpers ----------
+    function clamp(x, a, b){ return Math.max(a, Math.min(b, x)); }
+    function hsvToRgb(h, s, v){
+      h = ((h % 1) + 1) % 1;
+      const i = Math.floor(h * 6);
+      const f = h * 6 - i;
+      const p = v * (1 - s);
+      const q = v * (1 - f * s);
+      const t = v * (1 - (1 - f) * s);
+      let r=0,g=0,b=0;
+      switch (i % 6){
+        case 0: r=v; g=t; b=p; break;
+        case 1: r=q; g=v; b=p; break;
+        case 2: r=p; g=v; b=t; break;
+        case 3: r=p; g=q; b=v; break;
+        case 4: r=t; g=p; b=v; break;
+        case 5: r=v; g=p; b=q; break;
+      }
+      return [r,g,b];
+    }
+    function randn(){
+      // Box–Muller
+      let u = 0, v = 0;
+      while(u === 0) u = Math.random();
+      while(v === 0) v = Math.random();
+      return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+    }
+    function randomPointInSphere(radius){
+      // approx uniform-ish via normal vector
+      let x = randn(), y = randn(), z = randn();
+      const len = Math.sqrt(x*x + y*y + z*z) || 1;
+      x /= len; y /= len; z /= len;
+      const r = radius * Math.cbrt(Math.random());
+      return [x*r, y*r, z*r];
+    }
+
+    // ---------- Barnes–Hut Octree ----------
+    const MAX_DEPTH = 18;
+
+    class Node {
+      constructor(cx, cy, cz, half, depth){
+        this.cx = cx; this.cy = cy; this.cz = cz;
+        this.half = half;
+        this.depth = depth;
+        this.mass = 0;
+        this.sx = 0; this.sy = 0; this.sz = 0; // sum(m*x)
+        this.child = null; // Array(8) or null
+        this.p = -1; // particle index for leaf (-1 none)
+      }
+      get isLeaf(){ return this.child === null; }
+    }
+
+    function childIndex(node, x, y, z){
+      let idx = 0;
+      if (x >= node.cx) idx |= 1;
+      if (y >= node.cy) idx |= 2;
+      if (z >= node.cz) idx |= 4;
+      return idx;
+    }
+
+    function ensureChildren(node){
+      if (node.child) return;
+      const h = node.half * 0.5;
+      node.child = new Array(8);
+      for (let i=0;i<8;i++){
+        const ox = (i & 1) ? h : -h;
+        const oy = (i & 2) ? h : -h;
+        const oz = (i & 4) ? h : -h;
+        node.child[i] = new Node(node.cx + ox, node.cy + oy, node.cz + oz, h, node.depth + 1);
+      }
+    }
+
+    function insertParticle(root, i, px, py, pz, m){
+      let node = root;
+      for(;;){
+        node.mass += m;
+        node.sx += m * px;
+        node.sy += m * py;
+        node.sz += m * pz;
+
+        if (node.isLeaf){
+          if (node.p === -1){
+            node.p = i;
+            return;
+          }
+          // already has a particle -> subdivide
+          if (node.depth >= MAX_DEPTH){
+            // too deep: keep "multiple" by not splitting further (approx)
+            // we just accumulate COM; self-handling later avoids explosion
+            return;
+          }
+          const existing = node.p;
+          node.p = -1;
+          ensureChildren(node);
+
+          // re-insert existing particle into child
+          const ex = pxArr[existing*3], ey = pxArr[existing*3+1], ez = pxArr[existing*3+2];
+          const em = massArr[existing];
+          let ci = childIndex(node, ex, ey, ez);
+          node = node.child[ci];
+          // recurse insert existing into that child (loop style)
+          for(;;){
+            node.mass += em;
+            node.sx += em * ex;
+            node.sy += em * ey;
+            node.sz += em * ez;
+
+            if (node.isLeaf){
+              if (node.p === -1){
+                node.p = existing;
+                break;
+              }
+              if (node.depth >= MAX_DEPTH){
+                break;
+              }
+              const e2 = node.p;
+              node.p = -1;
+              ensureChildren(node);
+
+              const e2x = pxArr[e2*3], e2y = pxArr[e2*3+1], e2z = pxArr[e2*3+2];
+              const e2m = massArr[e2];
+              let ci2 = childIndex(node, e2x, e2y, e2z);
+              node = node.child[ci2];
+              continue;
+            } else {
+              let ci3 = childIndex(node, ex, ey, ez);
+              node = node.child[ci3];
+              continue;
+            }
+          }
+
+          // now insert the new particle into correct child (restart from original node)
+          node = root;
+          // fallthrough to normal insertion loop: we already accounted mass at root path above,
+          // but we must continue from root properly without double-counting:
+          // easiest is: do a second insertion pass without adding mass to nodes; but that's costly.
+          // Instead, we implement a separate insertion routine that doesn't double-count.
+          // -> We'll do "insertNoAccum" from the original split node.
+          return;
+        } else {
+          const ci = childIndex(node, px, py, pz);
+          node = node.child[ci];
+        }
+      }
+    }
+
+    // A safer insertion without the "reinsert existing with weird control flow"
+    // We'll rebuild the tree with a clean recursive insert below.
+    function buildTree(root, n){
+      // reset root
+      root.mass = 0; root.sx = 0; root.sy = 0; root.sz = 0;
+      root.child = null; root.p = -1;
+      for (let i=0;i<n;i++){
+        insertClean(root, i);
+      }
+    }
+
+    function insertClean(node, i){
+      const px = pxArr[i*3], py = pxArr[i*3+1], pz = pxArr[i*3+2];
+      const m = massArr[i];
+
+      node.mass += m;
+      node.sx += m * px;
+      node.sy += m * py;
+      node.sz += m * pz;
+
+      if (node.isLeaf){
+        if (node.p === -1){
+          node.p = i;
+          return;
+        }
+        if (node.depth >= MAX_DEPTH){
+          return;
+        }
+        const existing = node.p;
+        node.p = -1;
+        ensureChildren(node);
+
+        // move existing into a child
+        const ex = pxArr[existing*3], ey = pxArr[existing*3+1], ez = pxArr[existing*3+2];
+        const ciOld = childIndex(node, ex, ey, ez);
+        insertClean(node.child[ciOld], existing);
+
+        // insert new
+        const ciNew = childIndex(node, px, py, pz);
+        insertClean(node.child[ciNew], i);
+        return;
+      }
+
+      const ci = childIndex(node, px, py, pz);
+      insertClean(node.child[ci], i);
+    }
+
+    function accelFromNode(i, node, theta, eps2, G){
+      const m = node.mass;
+      if (m <= 0) return [0,0,0];
+
+      const x = pxArr[i*3], y = pxArr[i*3+1], z = pxArr[i*3+2];
+
+      // center of mass
+      const comx = node.sx / m, comy = node.sy / m, comz = node.sz / m;
+
+      let dx = comx - x, dy = comy - y, dz = comz - z;
+      const dist2 = dx*dx + dy*dy + dz*dz + eps2;
+
+      // leaf: do direct if it contains a different particle
+      if (node.isLeaf){
+        const j = node.p;
+        if (j === -1 || j === i) return [0,0,0];
+        const xj = pxArr[j*3], yj = pxArr[j*3+1], zj = pxArr[j*3+2];
+        dx = xj - x; dy = yj - y; dz = zj - z;
+        const d2 = dx*dx + dy*dy + dz*dz + eps2;
+        const inv = 1 / Math.sqrt(d2);
+        const inv3 = inv * inv * inv;
+        const s = G * massArr[j] * inv3;
+        return [dx*s, dy*s, dz*s];
+      }
+
+      const sSize = node.half * 2;
+      const d = Math.sqrt(dist2);
+
+      if (sSize / d < theta){
+        const inv = 1 / d;
+        const inv3 = inv * inv * inv;
+        const s = G * m * inv3;
+        return [dx*s, dy*s, dz*s];
+      }
+
+      let ax=0, ay=0, az=0;
+      for (let k=0;k<8;k++){
+        const c = node.child[k];
+        if (!c || c.mass <= 0) continue;
+        const a = accelFromNode(i, c, theta, eps2, G);
+        ax += a[0]; ay += a[1]; az += a[2];
+      }
+      return [ax, ay, az];
+    }
+
+    // ---------- Simulation State ----------
+    const state = {
+      G: 1.00,
+      eps: 2.00,
+      dt: 0.016,
+      count: 2000,
+      size: 2.0,
+      paused: false,
+      mode: "velocity",
+      theta: 0.70,       // Barnes–Hut opening angle (not exposed in UI)
+      boundsHalf: 220,   // initial spawn scale; tree uses fixed world bounds below
+      worldHalf: 900     // octree root half-size
+    };
+
+    let pxArr = new Float32Array(0);  // positions
+    let vxArr = new Float32Array(0);  // velocities
+    let massArr = new Float32Array(0);
+    let ageArr = new Float32Array(0);
+    let colorArr = new Float32Array(0);
+
+    let simTime = 0;
+
+    // ---------- Three.js Setup ----------
+    const rootEl = document.getElementById("root");
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    rootEl.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x05060a, 0.0009);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 6000);
+    camera.position.set(0, 120, 420);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.target.set(0, 0, 0);
+
+    const geometry = new THREE.BufferGeometry();
+    const material = new THREE.PointsMaterial({
+      size: state.size,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.95,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+    const points = new THREE.Points(geometry, material);
+    scene.add(points);
+
+    // subtle background stars
+    const starGeom = new THREE.BufferGeometry();
+    const starCount = 2000;
+    const starPos = new Float32Array(starCount*3);
+    for (let i=0;i<starCount;i++){
+      const r = 2600 * Math.cbrt(Math.random());
+      const a = Math.random()*Math.PI*2;
+      const b = Math.acos(2*Math.random()-1);
+      starPos[i*3]   = r*Math.sin(b)*Math.cos(a);
+      starPos[i*3+1] = r*Math.cos(b);
+      starPos[i*3+2] = r*Math.sin(b)*Math.sin(a);
+    }
+    starGeom.setAttribute("position", new THREE.BufferAttribute(starPos, 3));
+    const stars = new THREE.Points(starGeom, new THREE.PointsMaterial({ size: 1.0, color: 0xffffff, transparent:true, opacity: 0.18, depthWrite:false }));
+    scene.add(stars);
+
+    // ---------- UI wiring ----------
+    const el = (id) => document.getElementById(id);
+
+    const g = el("g"), eps = el("eps"), dt = el("dt"), count = el("count"), size = el("size"), mode = el("mode");
+    const gOut = el("gOut"), epsOut = el("epsOut"), dtOut = el("dtOut"), countOut = el("countOut"), sizeOut = el("sizeOut");
+    const pauseBtn = el("pauseBtn"), resetBtn = el("resetBtn");
+
+    function syncUI(){
+      g.value = state.G.toFixed(2); gOut.textContent = state.G.toFixed(2);
+      eps.value = state.eps.toFixed(2); epsOut.textContent = state.eps.toFixed(2);
+      dt.value = state.dt.toFixed(3); dtOut.textContent = state.dt.toFixed(3);
+      count.value = String(state.count); countOut.textContent = String(state.count);
+      size.value = state.size.toFixed(1); sizeOut.textContent = state.size.toFixed(1);
+      mode.value = state.mode;
+      pauseBtn.textContent = state.paused ? "▶ Resume" : "⏸ Pause";
+    }
+
+    g.addEventListener("input", () => { state.G = parseFloat(g.value); gOut.textContent = state.G.toFixed(2); });
+    eps.addEventListener("input", () => { state.eps = parseFloat(eps.value); epsOut.textContent = state.eps.toFixed(2); });
+    dt.addEventListener("input", () => { state.dt = parseFloat(dt.value); dtOut.textContent = state.dt.toFixed(3); });
+    size.addEventListener("input", () => {
+      state.size = parseFloat(size.value);
+      sizeOut.textContent = state.size.toFixed(1);
+      material.size = state.size;
+    });
+    mode.addEventListener("change", () => { state.mode = mode.value; });
+
+    count.addEventListener("change", () => {
+      state.count = parseInt(count.value, 10);
+      countOut.textContent = String(state.count);
+      resetSim();
+    });
+
+    pauseBtn.addEventListener("click", () => {
+      state.paused = !state.paused;
+      pauseBtn.textContent = state.paused ? "▶ Resume" : "⏸ Pause";
+    });
+
+    resetBtn.addEventListener("click", () => resetSim());
+
+    // ---------- Simulation init/reset ----------
+    function resetSim(){
+      simTime = 0;
+
+      const n = state.count;
+      pxArr = new Float32Array(n*3);
+      vxArr = new Float32Array(n*3);
+      massArr = new Float32Array(n);
+      ageArr = new Float32Array(n);
+      colorArr = new Float32Array(n*3);
+
+      // galaxy-ish init
+      const R = state.boundsHalf;
+      for (let i=0;i<n;i++){
+        const p = randomPointInSphere(R);
+        const x = p[0], y = p[1]*0.35, z = p[2]; // flatten a bit
+        pxArr[i*3] = x; pxArr[i*3+1] = y; pxArr[i*3+2] = z;
+
+        const m = 0.4 + Math.random()*1.8;
+        massArr[i] = m;
+        ageArr[i] = 0;
+
+        // tangential velocity around Y axis
+        const r = Math.sqrt(x*x + z*z) + 1e-6;
+        const tx = -z / r, tz = x / r;
+        const speed = 0.55 / Math.sqrt(r*0.08 + 1) + (Math.random()-0.5)*0.02;
+        vxArr[i*3] = tx * speed;
+        vxArr[i*3+1] = (Math.random()-0.5) * 0.02;
+        vxArr[i*3+2] = tz * speed;
+      }
+
+      geometry.setAttribute("position", new THREE.BufferAttribute(pxArr, 3));
+      geometry.setAttribute("color", new THREE.BufferAttribute(colorArr, 3));
+      geometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
+      geometry.attributes.color.setUsage(THREE.DynamicDrawUsage);
+
+      updateColors();
+      geometry.attributes.color.needsUpdate = true;
+      geometry.attributes.position.needsUpdate = true;
+    }
+
+    // ---------- Coloring ----------
+    function updateColors(){
+      const n = state.count;
+      let vMax = 0;
+      let mMin = Infinity, mMax = -Infinity;
+      let zMin = Infinity, zMax = -Infinity;
+      let aMax = 0;
+
+      if (state.mode === "velocity"){
+        for (let i=0;i<n;i++){
+          const vx = vxArr[i*3], vy = vxArr[i*3+1], vz = vxArr[i*3+2];
+          const v = Math.sqrt(vx*vx + vy*vy + vz*vz);
+          if (v > vMax) vMax = v;
+        }
+        vMax = Math.max(vMax, 1e-6);
+        for (let i=0;i<n;i++){
+          const vx = vxArr[i*3], vy = vxArr[i*3+1], vz = vxArr[i*3+2];
+          const v = Math.sqrt(vx*vx + vy*vy + vz*vz);
+          const t = clamp(v / vMax, 0, 1);
+          const [r,g,b] = hsvToRgb(0.66*(1-t), 1.0, 0.95);
+          colorArr[i*3] = r; colorArr[i*3+1] = g; colorArr[i*3+2] = b;
+        }
+        return;
+      }
+
+      if (state.mode === "mass"){
+        for (let i=0;i<n;i++){ const m = massArr[i]; mMin = Math.min(mMin, m); mMax = Math.max(mMax, m); }
+        const denom = Math.max(1e-6, mMax - mMin);
+        for (let i=0;i<n;i++){
+          const t = clamp((massArr[i] - mMin)/denom, 0, 1);
+          const [r,g,b] = hsvToRgb(0.10 + 0.75*t, 0.9, 0.95);
+          colorArr[i*3] = r; colorArr[i*3+1] = g; colorArr[i*3+2] = b;
+        }
+        return;
+      }
+
+      if (state.mode === "depth"){
+        for (let i=0;i<n;i++){
+          const z = pxArr[i*3+2];
+          zMin = Math.min(zMin, z); zMax = Math.max(zMax, z);
+        }
+        const denom = Math.max(1e-6, zMax - zMin);
+        for (let i=0;i<n;i++){
+          const t = clamp((pxArr[i*3+2] - zMin)/denom, 0, 1);
+          const [r,g,b] = hsvToRgb(0.58 - 0.48*t, 0.85, 0.95);
+          colorArr[i*3] = r; colorArr[i*3+1] = g; colorArr[i*3+2] = b;
+        }
+        return;
+      }
+
+      // age
+      for (let i=0;i<n;i++) aMax = Math.max(aMax, ageArr[i]);
+      aMax = Math.max(aMax, 1e-6);
+      for (let i=0;i<n;i++){
+        const t = clamp(ageArr[i]/aMax, 0, 1);
+        const [r,g,b] = hsvToRgb(0.85 - 0.75*t, 0.9, 0.95);
+        colorArr[i*3] = r; colorArr[i*3+1] = g; colorArr[i*3+2] = b;
+      }
+    }
+
+    // ---------- Main loop ----------
+    const fpsEl = el("fps"), pcEl = el("pcount"), tEl = el("simt"), keEl = el("ke");
+    let lastNow = performance.now();
+    let fpsAcc = 0, fpsFrames = 0;
+
+    const rootTree = new Node(0,0,0, state.worldHalf, 0);
+
+    function step(){
+      const now = performance.now();
+      const dtReal = (now - lastNow) / 1000;
+      lastNow = now;
+
+      fpsAcc += dtReal; fpsFrames++;
+      if (fpsAcc >= 0.35){
+        const fps = fpsFrames / fpsAcc;
+        fpsEl.textContent = fps.toFixed(0);
+        fpsAcc = 0; fpsFrames = 0;
+      }
+
+      controls.update();
+
+      if (!state.paused){
+        const n = state.count;
+        const dtSim = state.dt;
+        const eps2 = state.eps * state.eps;
+        const G = state.G;
+
+        // rebuild octree each frame
+        rootTree.cx = 0; rootTree.cy = 0; rootTree.cz = 0;
+        rootTree.half = state.worldHalf;
+        rootTree.depth = 0;
+        buildTree(rootTree, n);
+
+        // integrate
+        let KE = 0;
+        for (let i=0;i<n;i++){
+          const a = accelFromNode(i, rootTree, state.theta, eps2, G);
+
+          const vx = vxArr[i*3]   + a[0] * dtSim;
+          const vy = vxArr[i*3+1] + a[1] * dtSim;
+          const vz = vxArr[i*3+2] + a[2] * dtSim;
+
+          // mild damping to avoid numeric blow-ups at high G/dt
+          const damp = 0.9992;
+          vxArr[i*3]   = vx * damp;
+          vxArr[i*3+1] = vy * damp;
+          vxArr[i*3+2] = vz * damp;
+
+          pxArr[i*3]   += vxArr[i*3]   * dtSim;
+          pxArr[i*3+1] += vxArr[i*3+1] * dtSim;
+          pxArr[i*3+2] += vxArr[i*3+2] * dtSim;
+
+          ageArr[i] += dtSim;
+
+          const v2 = vxArr[i*3]*vxArr[i*3] + vxArr[i*3+1]*vxArr[i*3+1] + vxArr[i*3+2]*vxArr[i*3+2];
+          KE += 0.5 * massArr[i] * v2;
+
+          // soft "containment" so the scene doesn't drift to infinity
+          const x = pxArr[i*3], y = pxArr[i*3+1], z = pxArr[i*3+2];
+          const r = Math.sqrt(x*x+y*y+z*z);
+          const limit = state.worldHalf * 0.92;
+          if (r > limit){
+            const k = 0.0008 * (r - limit);
+            vxArr[i*3]   -= (x / (r||1)) * k;
+            vxArr[i*3+1] -= (y / (r||1)) * k;
+            vxArr[i*3+2] -= (z / (r||1)) * k;
+          }
+        }
+
+        simTime += dtSim;
+
+        updateColors();
+
+        geometry.attributes.position.needsUpdate = true;
+        geometry.attributes.color.needsUpdate = true;
+
+        tEl.textContent = simTime.toFixed(2);
+        keEl.textContent = KE.toFixed(0);
+      }
+
+      pcEl.textContent = String(state.count);
+
+      renderer.render(scene, camera);
+      requestAnimationFrame(step);
+    }
+
+    window.addEventListener("resize", () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+    });
+
+    // boot
+    syncUI();
+    resetSim();
+    requestAnimationFrame(step);
+  </script>
+</body>
+</html>
